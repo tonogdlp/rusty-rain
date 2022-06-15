@@ -8,7 +8,6 @@ pub struct Rain {
     pub length: Vec<usize>,
     pub colors: Vec<Vec<style::Color>>,
     pub time: Vec<(Instant, Duration)>,
-    pub queue: Vec<usize>,
     pub width: u16,
     pub height: u16,
 }
@@ -20,7 +19,7 @@ impl Rain {
     {
         let w = (width / us.group.width()) as usize;
         let h = height as usize;
-        let charaters = gen::charater_vecs(w, height, &us.group);
+        let charaters = vec![vec![' '; h]; w];
         let locations = vec![0; w];
         let length = gen::lengths(w, h);
         let colors = gen::colors(
@@ -31,14 +30,12 @@ impl Rain {
             us.rain_color.into(),
         );
         let time = gen::times(w, us.speed);
-        let queue = Vec::with_capacity(w);
         Self {
             charaters,
             locations,
             length,
             colors,
             time,
-            queue,
             width,
             height,
         }

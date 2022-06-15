@@ -21,7 +21,7 @@ use characters::Characters;
 use direction::Direction;
 use rain::Rain;
 use term::{clear, draw};
-use update::{reset, update};
+use update::update;
 use user_input::user_input;
 use user_settings::UserSettings;
 
@@ -63,8 +63,8 @@ fn main() -> Result<()> {
             &user_settings.direction,
         )?;
         stdout.flush()?;
-        update(&mut rain);
-        reset(create_color, &mut rain, &user_settings);
+        update(&mut rain, &user_settings.group);
+        // reset(create_color, &mut rain, &user_settings);
     }
 
     execute!(stdout, cursor::Show, terminal::LeaveAlternateScreen)?;
