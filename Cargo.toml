@@ -17,6 +17,7 @@ crossterm = "0.23.2"
 rand = "0.8.5"
 itertools = "0.10.3"
 ezemoji = "0.2.0"
+unicode-width = "0.1.9"
 
 [profile.release]
 debug = true
