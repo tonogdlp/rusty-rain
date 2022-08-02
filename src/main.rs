@@ -6,9 +6,7 @@ use crossterm::{
 };
 use ezemoji::*;
 use rand::{thread_rng, Rng};
-// use unicode_width::UnicodeWidthChar;
 
-// use std::fmt;
 use std::io::{stdout, Stdout, Write};
 use std::time::{Duration, Instant};
 
@@ -32,24 +30,17 @@ fn main() -> Result<()> {
         }
         Direction::Up | Direction::Down => terminal::size()?,
     };
-    let (width, height) = (width, height - 1);
 
-    let create_color = color_function(user_settings.shading);
+    // let create_color = color_function(user_settings.shading);
 
-    let mut rain = Rain::new(create_color, width, height, &user_settings);
+    let mut rain = Rain::new(width, height, &user_settings);
     let mut is_running = true;
 
     terminal::enable_raw_mode()?;
     execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide)?;
 
     while is_running {
-        user_input(
-            &mut stdout,
-            &mut rain,
-            &user_settings,
-            create_color,
-            &mut is_running,
-        )?;
+        user_input(&mut stdout, &mut rain, &user_settings, &mut is_running)?;
         draw(
             &mut stdout,
             &rain,
@@ -58,7 +49,6 @@ fn main() -> Result<()> {
         )?;
         stdout.flush()?;
         update(&mut rain, &user_settings);
-        // reset(create_color, &mut rain, &user_settings);
     }
 
     execute!(stdout, cursor::Show, terminal::LeaveAlternateScreen)?;
@@ -66,13 +56,11 @@ fn main() -> Result<()> {
 
     Ok(())
 }
-// User Input
 
 fn user_input(
     stdout: &mut Stdout,
     rain: &mut Rain,
     user_settings: &UserSettings,
-    create_color: fn(Color, Color, u8) -> Vec<Color>,
     mode: &mut bool,
 ) -> Result<()> {
     use event::{poll, read, Event, KeyCode, KeyEvent, KeyModifiers};
@@ -87,7 +75,7 @@ fn user_input(
             }
             Event::Resize(w, h) => {
                 clear(stdout)?;
-                *rain = Rain::new(create_color, w, h, user_settings);
+                *rain = Rain::new(w, h, user_settings);
             }
             _ => {}
         }
@@ -95,7 +83,6 @@ fn user_input(
     Ok(())
 }
 
-// Update
 fn update(rain: &mut Rain, us: &UserSettings) {
     let mut rng = thread_rng();
     let g = us.group.as_vec_u32();
@@ -110,15 +97,38 @@ fn update(rain: &mut Rain, us: &UserSettings) {
     {
         if *time <= now {
             if *location < rain.height as usize {
-                // Remove tail of rain
-                let _ = ch.pop().unwrap_or('&');
-                ch.insert(*location, rng_char());
+                // Generates new char
+                let _ = ch.pop();
+                let mut color = ContentStyle::new();
+                color.foreground_color = Some(rain.head);
+                // if us.shading {
+                // if let Some(c) = ch.get(*location) {
+                //     if c.content() != &' ' {
+                //         color.foreground_color =
+                //             Some(gen_from_pos(&rain.base_color, &rain.head, loc, *len as u8));
+                //         loc += 1;
+                //     }
+                // }
+                // }
+                ch.insert(*location, StyledContent::new(color, rng_char()));
+            }
+            if is_behide_head(location, rain.height as usize) {
+                let loc = location.saturating_sub(1);
+                let old = ch.remove(loc);
+                let mut color = ContentStyle::new();
+                color.foreground_color = Some(gen_from_pos(
+                    &rain.base_color,
+                    &rain.head,
+                    (*len - 1) as u8,
+                    *len as u8,
+                ));
+                ch.insert(loc, StyledContent::new(color, *old.content()));
             }
             if is_tail_in_screen(location, len, rain.height as usize) {
                 // Remove tail of rain
                 let loc = location.saturating_sub(*len + 1);
                 ch.remove(loc);
-                ch.insert(loc, ' ');
+                ch.insert(loc, StyledContent::new(ContentStyle::new(), ' '));
             }
             if is_reset(location, len, rain.height as usize) {
                 // Reset Line and give a new length
@@ -128,12 +138,19 @@ fn update(rain: &mut Rain, us: &UserSettings) {
                 *delay = Duration::from_millis(rng.gen_range(slowest..fastest));
                 *len = rng.gen_range(4..(rain.height as usize) - 10);
                 *location = 0;
+            } else {
+                *time += *delay;
+                *location += 1;
             }
-            *time += *delay;
-            *location += 1;
         }
     }
 }
+
+fn is_behide_head(location: &usize, height: usize) -> bool {
+    let behide_head = location.saturating_sub(1);
+    location > &0 && behide_head < height
+}
+
 fn is_tail_in_screen(location: &usize, length: &usize, height: usize) -> bool {
     let tail_loc = location.saturating_sub(*length);
     tail_loc < height && location > length
@@ -143,88 +160,72 @@ fn is_reset(location: &usize, length: &usize, height: usize) -> bool {
     location.saturating_sub(*length) > height
 }
 
-// Rain Struct
-
 #[derive(Debug)]
 struct Rain {
-    charaters: Vec<Vec<char>>,
+    charaters: Vec<Vec<StyledContent<char>>>,
     locations: Vec<usize>,
     length: Vec<usize>,
-    colors: Vec<Vec<Color>>,
     time: Vec<(Instant, Duration)>,
-    width: u16,
     height: u16,
     base_color: Color,
+    head: Color,
 }
 impl Rain {
-    fn new<F>(create_color: F, width: u16, height: u16, us: &UserSettings) -> Self
-    where
-        F: Fn(Color, Color, u8) -> Vec<Color>,
-    {
+    fn new(width: u16, height: u16, us: &UserSettings) -> Self {
         let w = (width / us.group.width()) as usize;
         let h = height as usize;
-        // TODO: Maybe we need a enum instead of a char to handle width
-        let charaters = vec![vec![' '; h]; w];
+        let charaters = vec![vec![StyledContent::new(ContentStyle::new(), ' '); h]; w];
         let locations = vec![0; w];
         let length = lengths(w, h);
-        let colors = colors(
-            create_color,
-            us.head_color,
-            w,
-            &length,
-            us.rain_color.into(),
-        );
         let time = times(w, us.speed);
         Self {
             charaters,
             locations,
             length,
-            colors,
             time,
-            width,
             height,
-            base_color: Color::Rgb { r: 0, g: 255, b: 0 },
+            base_color: us.rain_color.into(),
+            head: us.head_color.into(),
         }
     }
 }
 
-/// Generates the color function on startup to remove branching if statements from code.
-fn color_function(shading: bool) -> fn(Color, Color, u8) -> Vec<Color> {
-    // This Creates a closure off of the args
-    // given to the program at start that will crates the colors for the rain
-    match shading {
-        // Creates shading colors
-        true => |bc: Color, head: Color, length: u8| {
-            let mut c: Vec<Color> = Vec::with_capacity(length as usize);
-            let (mut nr, mut ng, mut nb);
-            if let Color::Rgb { r, g, b } = bc {
-                for i in 0..length {
-                    nr = r / length;
-                    ng = g / length;
-                    nb = b / length;
-                    c.push((nr * i, ng * i, nb * i).into());
-                }
-                c.push(head);
-                c.reverse();
-            }
-            c
-        },
-        // creates with out color
-        _ => |bc: Color, head: Color, length: u8| {
-            let mut c: Vec<Color> = Vec::with_capacity(length as usize);
-            c.push(head);
-            if let Color::Rgb { r, g, b } = bc {
-                for _ in 0..length {
-                    c.push((r, g, b).into());
-                }
-            }
-            c
-        },
+fn gen_from_pos(bc: &Color, head: &Color, length: u8, max: u8) -> Color {
+    if length == 0 {
+        return Color::Rgb { r: 0, b: 0, g: 0 };
+    } else if length != max {
+        if let Color::Rgb { r, g, b } = bc {
+            let nr = r / length;
+            let ng = g / length;
+            let nb = b / length;
+            return (nr * length, ng * length, nb * length).into();
+        }
     }
+    head.clone()
 }
 
-// TODO: I feel like slowest and fastest are labeled wrong.........
-/// Generates Timing for rain to fall. AKA the speed of the rain fall.
+// fn color_function(shading: bool) -> fn(Color, Color, u8) -> Vec<Color> {
+//     match shading {
+//         true => |bc: Color, head: Color, length: u8| {
+//             let mut c: Vec<Color> = Vec::with_capacity(length as usize);
+//             for i in (0..=length).rev() {
+//                 c.push(gen_from_pos(&bc, &head, i, length));
+//             }
+//             c
+//         },
+//         _ => |bc: Color, head: Color, length: u8| {
+//             let mut c: Vec<Color> = Vec::with_capacity(length as usize);
+//             c.push(head);
+//             if let Color::Rgb { r, g, b } = bc {
+//                 for _ in 0..length {
+//                     c.push((r, g, b).into());
+//                 }
+//             }
+//             c
+//         },
+//     }
+// }
+
 fn times(width: usize, (slowest, fastest): (u64, u64)) -> Vec<(Instant, Duration)> {
     let now = Instant::now();
     let mut rng = thread_rng();
@@ -233,28 +234,10 @@ fn times(width: usize, (slowest, fastest): (u64, u64)) -> Vec<(Instant, Duration
         .collect()
 }
 
-/// Generates the visable length of each column.
 fn lengths(width: usize, height: usize) -> Vec<usize> {
     let mut rng = thread_rng();
     (0..width).map(|_| rng.gen_range(4..height - 10)).collect()
 }
-
-/// Uses Generates function to create all the color of the Rain/CharacterSheet.
-fn colors<F: Fn(Color, Color, u8) -> Vec<Color>>(
-    create_color: F,
-    head: (u8, u8, u8),
-    width: usize,
-    length: &[usize],
-    bc: Color,
-) -> Vec<Vec<Color>> {
-    let mut colors = Vec::with_capacity(width);
-    for l in length.iter() {
-        colors.push(create_color(bc, head.into(), *l as u8));
-    }
-    colors
-}
-
-// Direction
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Direction {
@@ -491,37 +474,6 @@ fn clear(w: &mut Stdout) -> Result<()> {
     Ok(())
 }
 
-fn add_color(rain: &Rain) -> Vec<Vec<StyledContent<char>>> {
-    assert_eq!(rain.charaters.len(), rain.length.len());
-    rain.charaters
-        .iter()
-        .zip(&rain.colors)
-        .zip(&rain.length)
-        .map(|((line, colors), _len)| {
-            let mut l = 0;
-            // assert_eq!(colors.len(), l);
-            line.iter()
-                .map(|c| {
-                    StyledContent::new(
-                        {
-                            let mut cs = ContentStyle::new();
-                            cs.foreground_color = if c == &' ' {
-                                None
-                            } else {
-                                let color = colors.get(l).map(Clone::clone);
-                                l = l.saturating_add(1);
-                                color
-                            };
-                            cs
-                        },
-                        *c,
-                    )
-                })
-                .collect::<Vec<StyledContent<char>>>()
-        })
-        .collect::<Vec<Vec<StyledContent<char>>>>()
-}
-
 fn rotate_screen(screen: &Vec<Vec<StyledContent<char>>>) -> Vec<Vec<StyledContent<char>>> {
     let w = screen.len();
     let h = screen[0].len();
@@ -551,15 +503,12 @@ fn make_printable(rain: &Vec<Vec<StyledContent<char>>>) -> String {
 }
 
 fn draw(w: &mut Stdout, rain: &Rain, _spacing: u16, _direction: &Direction) -> Result<()> {
-    let colored_screen = add_color(&rain);
-    let rotated_screen = rotate_screen(&colored_screen);
+    let rotated_screen = rotate_screen(&rain.charaters);
     let printable_screen = make_printable(&rotated_screen);
-    queue!(w, cursor::MoveTo(0, 0), style::Print(printable_screen))?;
+    queue!(w, cursor::MoveTo(1, 1), style::Print(printable_screen))?;
     Ok(())
 }
 
-// User Settings
-#[derive(Debug, Clone)]
 struct UserSettings {
     rain_color: (u8, u8, u8),
     head_color: (u8, u8, u8),
